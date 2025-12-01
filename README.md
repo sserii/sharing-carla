@@ -15,6 +15,7 @@ $ cd ~/carla && ./CarlaUE4.sh --ros2
 $ cd ~/carla/PythonAPI/examples/ros2 && python3 ros2_native.py --file stack.json
 ```
 
+(terminal 3)
 ```bash
-(terminal 3) $ rviz2
+ $ rviz2
 ```
