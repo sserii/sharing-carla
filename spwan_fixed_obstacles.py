@@ -5,6 +5,7 @@ import sys
 import carla
 import random
 import time
+import math
 
 # ==============================================================================
 # CARLA 모듈 경로 설정
@@ -19,36 +20,58 @@ except IndexError:
 
 def main():
     # ==============================================================================
-    # [사용자 설정] 장애물 종류별 스폰 위치 설정 (모든 유형 포함)
-    # 원하는 위치의 번호(ID)를 리스트에 적으세요. (비워두면 스폰 안 함)
+    # [사용자 설정] 장애물 위치 미세 조정 (Offset)
+    # 형식: { 인덱스: (앞뒤_이동, 좌우_이동) }  단위: 미터(m)
+    # 
+    # 앞뒤(Forward): +가 앞, -가 뒤
+    # 좌우(Right):   +가 오른쪽, -가 왼쪽
     # ==============================================================================
     
-    # 1. 차량 (Vehicle) - 주차된 차
-    target_vehicle_indices = [120, 200]
+    # 예시: 82번 위치에서...
+    # (0.0, 0.0) -> 원래 위치 그대로
+    # (2.0, 0.0) -> 앞으로 2m 이동
+    # (0.0, -1.5) -> 왼쪽으로 1.5m 이동 (중앙선 침범 유도 등)
     
-    # 2. 고깔 (Cone) - 공사 구간 재현
-    target_cone_indices = [50, 51, 52]
+    # 1. 차량 (Vehicle)
+    target_vehicle_indices = {
+        120: (0.0, 0.0),   # 원래 위치
+        200: (5.0, 0.5)    # 앞으로 5m, 오른쪽으로 0.5m 이동
+    }
     
-    # 3. 안전 펜스 (Barrier) - 도로 차단용
-    target_barrier_indices = [] 
+    # 2. 고깔 (Cone)
+    target_cone_indices = {
+        50: (0.0, 0.0),
+        51: (0.0, 1.0),    # 오른쪽으로 1m 비켜서 설치
+        52: (0.0, -1.0)    # 왼쪽으로 1m 비켜서 설치
+    }
     
-    # 4. 자전거/오토바이 (Cyclist) - 이륜차
-    target_cyclist_indices = [85]
+    # 3. 안전 펜스 (Barrier)
+    target_barrier_indices = {} # 비워둘 때는 빈 딕셔너리 {}
+    
+    # 4. 자전거 (Cyclist)
+    target_cyclist_indices = {
+                           
+    }
 
-    # 5. 박스 (Box) - 낙하물 (종이박스, 나무상자 등)
-    target_box_indices = [82]
+    # 5. 기타 장애물들 
+    target_box_indices = {
+        82: (0.0, -1.0)
+    }
+    target_barrel_indices = {
 
-    # 6. 드럼통 (Barrel) - 충격 흡수통, 공사 자재
-    target_barrel_indices = []
+    }
 
-    # 7. 쓰레기통/자판기 (Urban Object) - 도심 장애물
-    target_trash_indices = []
+    target_trash_indices = {
 
-    # 8. 타이어 (Tire) - 타이어 낙하물
-    target_tire_indices = []
+    }
 
-    # 9. 공사 표지판 (Warning Sign) - 공사중/주의 표지판
-    target_sign_indices = []
+    target_tire_indices = {
+
+    }
+
+    target_sign_indices = {
+        
+    }
 
     # ==============================================================================
 
@@ -60,33 +83,54 @@ def main():
 
     actor_list = []
 
+    # 오프셋 적용 함수
+    def apply_offset(transform, forward_offset, right_offset):
+        # 현재 위치의 회전각(Yaw)을 라디안으로 변환
+        yaw_rad = math.radians(transform.rotation.yaw)
+        
+        # 전진 벡터 계산
+        fw_x = math.cos(yaw_rad)
+        fw_y = math.sin(yaw_rad)
+        
+        # 우측 벡터 계산 (전진 벡터에서 90도 회전)
+        r_x = math.sin(yaw_rad)
+        r_y = -math.cos(yaw_rad) # CARLA 좌표계(Left-handed) 고려
+        
+        # 좌표 이동
+        transform.location.x += (fw_x * forward_offset) + (r_x * right_offset)
+        transform.location.y += (fw_y * forward_offset) + (r_y * right_offset)
+        
+        return transform
+
     # 장애물 생성 함수
-    def spawn_obstacles(indices, filter_pattern, type_name):
-        if not indices:
+    def spawn_obstacles(targets_dict, filter_pattern, type_name):
+        if not targets_dict:
             return
 
-        print(f"Spawning {type_name} ({filter_pattern}) at: {indices}")
+        print(f"Spawning {type_name} ({filter_pattern})...")
         
-        for idx in indices:
+        # 딕셔너리 순회: idx(번호), (f_off, r_off)(이동량)
+        for idx, (f_off, r_off) in targets_dict.items():
             if idx >= len(spawn_points):
                 print(f"  [Warning] Index {idx} is out of range. Skipping.")
                 continue
             
-            transform = spawn_points[idx]
+            # 원본 위치 복사 (참조가 아닌 값 복사)
+            original_tf = spawn_points[idx]
+            transform = carla.Transform(original_tf.location, original_tf.rotation)
+            
+            # [핵심] 오프셋 적용
+            transform = apply_offset(transform, f_off, r_off)
             
             # 블루프린트 검색
             blueprints = bp_lib.filter(filter_pattern)
-            if not blueprints:
-                print(f"  [Error] No blueprints found for {filter_pattern}")
-                continue
+            if not blueprints: continue
 
-            # 차량 필터링 (4륜차만)
             if type_name == "Vehicle":
                 blueprints = [x for x in blueprints if int(x.get_attribute('number_of_wheels')) == 4]
             
             bp = random.choice(blueprints)
 
-            # 차량 색상 랜덤 설정
             if bp.has_attribute('color'):
                 color = random.choice(bp.get_attribute('color').recommended_values)
                 bp.set_attribute('color', color)
@@ -95,7 +139,6 @@ def main():
             actor = world.try_spawn_actor(bp, transform)
             
             if actor:
-                # 물리 엔진 및 고정 설정
                 if type_name in ["Vehicle", "Cyclist"]:
                     actor.set_autopilot(False)
                     actor.set_simulate_physics(True)
@@ -103,34 +146,29 @@ def main():
                     control.hand_brake = True
                     actor.apply_control(control)
                 else:
-                    # 정적 물체는 물리 엔진 켜두면 자연스럽게 바닥에 놓임
                     actor.set_simulate_physics(True)
                 
                 actor_list.append(actor)
-                print(f"  -> Spawned {bp.id} at Index {idx}")
+                print(f"  -> Spawned {bp.id} at Index {idx} (Offset: F={f_off}, R={r_off})")
             else:
-                print(f"  -> Failed to spawn at Index {idx} (Collision?)")
+                print(f"  -> Failed at Index {idx} (Collision?)")
 
     try:
-        # 모든 종류별 장애물 생성 실행
         spawn_obstacles(target_vehicle_indices, 'vehicle.*', "Vehicle")
         spawn_obstacles(target_cyclist_indices, 'vehicle.bh.crossbike', "Cyclist")
         
-        # 정적 장애물 (Props)
         spawn_obstacles(target_cone_indices, 'static.prop.constructioncone', "Cone")
         spawn_obstacles(target_barrier_indices, 'static.prop.streetbarrier', "Barrier")
         
-        # 추가된 장애물들
-        spawn_obstacles(target_box_indices, 'static.prop.box*', "Box") # box01, box02, creasedbox 등
+        spawn_obstacles(target_box_indices, 'static.prop.box*', "Box")
         spawn_obstacles(target_barrel_indices, 'static.prop.barrel', "Barrel")
-        spawn_obstacles(target_trash_indices, 'static.prop.trashcan*', "TrashCan") # trashcan01 ~ 05
+        spawn_obstacles(target_trash_indices, 'static.prop.trashcan*', "TrashCan")
         spawn_obstacles(target_tire_indices, 'static.prop.tire', "Tire")
-        spawn_obstacles(target_sign_indices, 'static.prop.warning*', "Sign") # warningconstruction, accident
+        spawn_obstacles(target_sign_indices, 'static.prop.warning*', "Sign")
 
         print(f"\nSuccessfully spawned total {len(actor_list)} obstacles.")
         print("Press Ctrl+C to remove obstacles and exit.")
 
-        # 무한 대기
         while True:
             time.sleep(1)
 
