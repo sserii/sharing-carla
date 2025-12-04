@@ -65,7 +65,7 @@ def main():
         # 1. 고정 장애물 스폰 (리스트가 비어있으므로 실행되지 않음)
         # ------------------------------------------------------------------
         print("--- No Fixed Obstacles (Skipped) ---")
-        used_indices = []
+        used_indices = [0]
 
         def apply_offset(transform, f_off, r_off):
             yaw = math.radians(transform.rotation.yaw)
